@@ -23,25 +23,25 @@ export async function GET(request: Request) {
       }
     )
 
-    await supabase.auth.exchangeCodeForSession(code)
+    const { error } = await supabase.auth.exchangeCodeForSession(code)
 
-    const { data: { user } } = await supabase.auth.getUser()
+    if (!error) {
+      const { data: { user } } = await supabase.auth.getUser()
 
-    if (user) {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .single()
+      if (user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single()
 
-      // Redirect based on role
-      if (profile?.role === 'tutor') {
-        return NextResponse.redirect(`${origin}/tutor/dashboard`)
-      } else {
+        if (profile?.role === 'tutor') {
+          return NextResponse.redirect(`${origin}/tutor/dashboard`)
+        }
         return NextResponse.redirect(`${origin}/dashboard`)
       }
     }
   }
 
-  return NextResponse.redirect(`${origin}/login`)
+  return NextResponse.redirect(`${origin}/login?error=auth_failed`)
 }

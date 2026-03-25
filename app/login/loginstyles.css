@@ -1,8 +1,9 @@
 :root {
   --primary: #000000;
   --secondary: #FFFFFF;
-  --accent: #FF5E5B;
-  --shadow: 8px 8px 0px var(--primary);
+  --accent: #A855F7;
+  --shawdowcolor: #7C3AED;
+  --shadow: 8px 8px 0px var(--shawdowcolor);
 }
 
 * {
@@ -92,7 +93,7 @@ button {
 }
 
 button:hover {
-  box-shadow: 4px 4px 0px var(--primary);
+  box-shadow: 4px 4px 0px var(--shawdowcolor);
   transform: translate(-2px, -2px);
 }
 
@@ -129,7 +130,7 @@ button:hover {
 }
 
 .social-btn:hover {
-  box-shadow: 4px 4px 0px var(--primary);
+  box-shadow: 4px 4px 0px var(--shawdowcolor);
   transform: translate(-2px, -2px);
 }
 
