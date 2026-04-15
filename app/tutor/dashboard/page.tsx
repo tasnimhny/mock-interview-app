@@ -18,9 +18,7 @@ export default async function TutorDashboard() {
             cookiesToSet.forEach(({ name, value, options }) =>
               cookieStore.set(name, value, options)
             )
-          } catch {
-            // Ignore in read-only server component context
-          }
+          } catch { /* read-only in server component */ }
         },
       },
     }
@@ -37,33 +35,82 @@ export default async function TutorDashboard() {
 
   if (profile?.role !== 'tutor') redirect('/dashboard')
 
-  // Fetch upcoming sessions — gracefully handles missing table
-  const { data: sessions } = await supabase
-    .from('sessions')
-    .select('*')
+  const now = new Date().toISOString()
+
+  // All booked timeslots for this tutor
+  const { data: bookedSlots } = await supabase
+    .from('timeslots')
+    .select('id, start_time, end_time')
     .eq('tutor_id', user.id)
-    .order('scheduled_at', { ascending: true })
-    .limit(10)
+    .eq('is_booked', true)
+    .order('start_time', { ascending: true })
 
-  const now = new Date()
-  const upcomingSessions = sessions?.filter(
-    (s) => s.scheduled_at && new Date(s.scheduled_at) > now
-  ) ?? []
-  const completedSessions = sessions?.filter((s) => s.status === 'completed') ?? []
+  // Get the bookings for those slots (to find student IDs)
+  const bookedSlotIds = (bookedSlots ?? []).map(s => s.id)
+  const { data: bookings } = bookedSlotIds.length > 0
+    ? await supabase
+        .from('bookings')
+        .select('id, user_id, timeslot_id, status')
+        .in('timeslot_id', bookedSlotIds)
+    : { data: [] }
 
-  // Fetch students (profiles with role 'user')
-  const { data: students } = await supabase
-    .from('profiles')
-    .select('id, full_name, email, created_at')
-    .eq('role', 'user')
-    .order('created_at', { ascending: false })
-    .limit(10)
+  // Get student profiles
+  const studentIds = [...new Set((bookings ?? []).map(b => b.user_id).filter(Boolean))]
+  const { data: students } = studentIds.length > 0
+    ? await supabase
+        .from('profiles')
+        .select('id, full_name, email')
+        .in('id', studentIds)
+    : { data: [] }
 
-  const displayName = profile?.full_name || user.email?.split('@')[0] || 'Tutor'
+  const studentMap = Object.fromEntries(
+    (students ?? []).map(s => [s.id, s.full_name ?? s.email ?? 'Unknown'])
+  )
+
+  // Merge slot + booking + student into one list
+  const bookingMap = Object.fromEntries(
+    (bookings ?? []).map(b => [b.timeslot_id, b])
+  )
+
+  const allBooked = (bookedSlots ?? []).map(slot => ({
+    ...slot,
+    booking: bookingMap[slot.id] ?? null,
+    studentName: bookingMap[slot.id]
+      ? (studentMap[bookingMap[slot.id].user_id] ?? '—')
+      : '—',
+    status: bookingMap[slot.id]?.status ?? 'confirmed',
+  }))
+
+  const upcomingBooked = allBooked.filter(s => s.start_time > now)
+  const pastBooked = allBooked.filter(s => s.start_time <= now)
+
+  // Available (not yet booked) upcoming slots count
+  const { count: availableCount } = await supabase
+    .from('timeslots')
+    .select('id', { count: 'exact', head: true })
+    .eq('tutor_id', user.id)
+    .eq('is_booked', false)
+    .gte('start_time', now)
+
+  const displayName = profile?.full_name ?? user.email?.split('@')[0] ?? 'Tutor'
+
+  function formatDateTime(ts: string) {
+    return new Date(ts).toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+  }
+
+  function durationMins(start: string, end: string) {
+    return Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000)
+  }
 
   return (
     <div className="dashboard-wrapper">
-      {/* ---- Navbar ---- */}
       <nav className="dashboard-nav">
         <div className="nav-brand">MOCK INTERVIEW</div>
         <div className="nav-user">
@@ -73,71 +120,64 @@ export default async function TutorDashboard() {
         </div>
       </nav>
 
-      {/* ---- Main Content ---- */}
       <main className="dashboard-main">
         <div className="dashboard-header">
           <h1>TUTOR DASHBOARD</h1>
           <p className="dashboard-subtitle">Welcome back, {displayName}</p>
         </div>
 
-        {/* ---- Stats Row ---- */}
+        {/* ---- Stats ---- */}
         <div className="stats-grid">
           <div className="stat-card">
-            <div className="stat-number">{upcomingSessions.length}</div>
-            <div className="stat-label">UPCOMING SESSIONS</div>
+            <div className="stat-number">{upcomingBooked.length}</div>
+            <div className="stat-label">UPCOMING BOOKINGS</div>
           </div>
           <div className="stat-card">
-            <div className="stat-number">{students?.length ?? 0}</div>
-            <div className="stat-label">TOTAL STUDENTS</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-number">{completedSessions.length}</div>
+            <div className="stat-number">{pastBooked.length}</div>
             <div className="stat-label">COMPLETED</div>
           </div>
+          <div className="stat-card">
+            <div className="stat-number">{availableCount ?? 0}</div>
+            <div className="stat-label">OPEN SLOTS</div>
+          </div>
           <div className="stat-card accent">
-            <div className="stat-number">—</div>
-            <div className="stat-label">AVG RATING</div>
+            <div className="stat-number">{allBooked.length}</div>
+            <div className="stat-label">TOTAL BOOKED</div>
           </div>
         </div>
 
         {/* ---- Two-column section ---- */}
         <div className="dashboard-grid">
-          {/* Upcoming Sessions */}
+          {/* Upcoming booked sessions */}
           <div className="dashboard-card">
             <div className="card-header">
-              <h2>UPCOMING SESSIONS</h2>
-              <button className="card-action-btn">+ SCHEDULE</button>
+              <h2>UPCOMING BOOKINGS</h2>
+              <Link href="/tutor/dashboard/availability" className="card-action-btn">
+                + ADD SLOTS
+              </Link>
             </div>
-            {upcomingSessions.length === 0 ? (
-              <div className="empty-state">No upcoming sessions scheduled.</div>
+
+            {upcomingBooked.length === 0 ? (
+              <div className="empty-state">No upcoming bookings yet.</div>
             ) : (
               <table className="sessions-table">
                 <thead>
                   <tr>
                     <th>STUDENT</th>
-                    <th>DATE</th>
-                    <th>TYPE</th>
+                    <th>DATE &amp; TIME</th>
+                    <th>DURATION</th>
                     <th>STATUS</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {upcomingSessions.map((session) => (
-                    <tr key={session.id}>
-                      <td>{session.student_name ?? '—'}</td>
+                  {upcomingBooked.map(slot => (
+                    <tr key={slot.id}>
+                      <td>{slot.studentName}</td>
+                      <td>{formatDateTime(slot.start_time)}</td>
+                      <td>{durationMins(slot.start_time, slot.end_time)} MIN</td>
                       <td>
-                        {session.scheduled_at
-                          ? new Date(session.scheduled_at).toLocaleDateString('en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })
-                          : '—'}
-                      </td>
-                      <td>{session.type ?? 'MOCK'}</td>
-                      <td>
-                        <span className={`status-badge ${session.status ?? ''}`}>
-                          {(session.status ?? 'SCHEDULED').toUpperCase()}
+                        <span className={`status-badge ${slot.status}`}>
+                          {slot.status.toUpperCase()}
                         </span>
                       </td>
                     </tr>
@@ -153,8 +193,9 @@ export default async function TutorDashboard() {
               <h2>QUICK ACTIONS</h2>
             </div>
             <div className="actions-list">
-              <Link href="/tutor/dashboard/availability" className="action-btn">AVAILABILITY</Link>
-              <button className="action-btn">SCHEDULE SESSION</button>
+              <Link href="/tutor/dashboard/availability" className="action-btn">
+                MANAGE AVAILABILITY
+              </Link>
               <button className="action-btn">VIEW ALL STUDENTS</button>
               <button className="action-btn">REVIEW FEEDBACK</button>
               <button className="action-btn">INTERVIEW BANK</button>
@@ -162,42 +203,38 @@ export default async function TutorDashboard() {
           </div>
         </div>
 
-        {/* ---- Students Table ---- */}
-        <div className="dashboard-card">
-          <div className="card-header">
-            <h2>STUDENTS</h2>
-          </div>
-          {!students || students.length === 0 ? (
-            <div className="empty-state">No students found.</div>
-          ) : (
+        {/* ---- Past sessions ---- */}
+        {pastBooked.length > 0 && (
+          <div className="dashboard-card">
+            <div className="card-header">
+              <h2>PAST SESSIONS</h2>
+            </div>
             <table className="sessions-table">
               <thead>
                 <tr>
-                  <th>NAME</th>
-                  <th>EMAIL</th>
-                  <th>JOINED</th>
+                  <th>STUDENT</th>
+                  <th>DATE &amp; TIME</th>
+                  <th>DURATION</th>
+                  <th>STATUS</th>
                 </tr>
               </thead>
               <tbody>
-                {students.map((student) => (
-                  <tr key={student.id}>
-                    <td>{student.full_name ?? '—'}</td>
-                    <td>{student.email ?? '—'}</td>
+                {pastBooked.map(slot => (
+                  <tr key={slot.id}>
+                    <td>{slot.studentName}</td>
+                    <td>{formatDateTime(slot.start_time)}</td>
+                    <td>{durationMins(slot.start_time, slot.end_time)} MIN</td>
                     <td>
-                      {student.created_at
-                        ? new Date(student.created_at).toLocaleDateString('en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric',
-                          })
-                        : '—'}
+                      <span className={`status-badge ${slot.status}`}>
+                        {slot.status.toUpperCase()}
+                      </span>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          )}
-        </div>
+          </div>
+        )}
       </main>
     </div>
   )

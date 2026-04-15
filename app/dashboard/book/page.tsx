@@ -127,12 +127,11 @@ export default function BookingCalendar() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { router.push('/login'); return }
 
-    // Insert booking
-    const { error: bookingError } = await supabase.from('bookings').insert({
-      user_id: user.id,
-      timeslot_id: slot.id,
-      status: 'confirmed',
-    })
+    // Insert booking — use .select() so we can detect silent RLS failures
+    const { data: inserted, error: bookingError } = await supabase
+      .from('bookings')
+      .insert({ user_id: user.id, timeslot_id: slot.id, status: 'confirmed' })
+      .select()
 
     if (bookingError) {
       alert('Booking failed: ' + bookingError.message)
@@ -140,14 +139,25 @@ export default function BookingCalendar() {
       return
     }
 
+    // RLS can silently block inserts — if nothing came back, the policy rejected it
+    if (!inserted || inserted.length === 0) {
+      alert('Booking failed: permission denied. Ask your admin to check RLS policies on the bookings table.')
+      setBookingId(null)
+      return
+    }
+
     // Mark timeslot as booked
-    await supabase
+    const { error: updateError } = await supabase
       .from('timeslots')
       .update({ is_booked: true })
       .eq('id', slot.id)
 
+    if (updateError) {
+      // Booking was saved but slot flag didn't update — not critical, log it
+      console.warn('Could not update is_booked:', updateError.message)
+    }
+
     setConfirmedIds(prev => new Set(prev).add(slot.id))
-    // Remove from slots list
     setSlots(prev => prev.filter(s => s.id !== slot.id))
     setBookingId(null)
   }
